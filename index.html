@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>极速文件快传 - 局域网/P2P文件传输</title>
+    
+    <!-- 引入 Tailwind CSS (UI 样式) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 引入 FontAwesome (图标) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- 引入 QRCode.js (生成二维码) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+    <!-- 引入 PeerJS (WebRTC 封装库) -->
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3b82f6',
+                        secondary: '#10b981',
+                    },
+                    animation: {
+                        'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            background-color: #f3f4f6;
+            font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
+        }
+        .drop-zone {
+            border: 2px dashed #cbd5e1;
+            transition: all 0.3s ease;
+        }
+        .drop-zone.active {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+        }
+        /* 进度条动画 */
+        .progress-bar-striped {
+            background-image: linear-gradient(45deg,rgba(255,255,255,.15) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.15) 50%,rgba(255,255,255,.15) 75%,transparent 75%,transparent);
+            background-size: 1rem 1rem;
+            animation: progress-bar-stripes 1s linear infinite;
+        }
+        @keyframes progress-bar-stripes {
+            0% { background-position: 1rem 0; }
+            100% { background-position: 0 0; }
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col items-center justify-center p-4 text-slate-800">
+
+    <!-- 顶部标题 -->
+    <header class="mb-8 text-center">
+        <div class="inline-flex items-center justify-center w-16 h-16 bg-blue-600 rounded-2xl shadow-lg mb-4 text-white text-3xl">
+            <i class="fa-solid fa-paper-plane"></i>
+        </div>
+        <h1 class="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-indigo-600">
+            极速文件快传
+        </h1>
+        <p class="text-slate-500 mt-2 text-sm">P2P 安全连接 · 无需服务器 · 原画质传输</p>
+    </header>
+
+    <!-- 主容器 -->
+    <main class="w-full max-w-lg glass-panel rounded-3xl p-6 relative overflow-hidden">
+        
+        <!-- 错误提示框 -->
+        <div id="error-toast" class="hidden absolute top-0 left-0 w-full bg-red-500 text-white p-3 text-center text-sm font-medium transform transition-transform duration-300 z-50">
+            <span id="error-msg">发生错误</span>
+            <button onclick="closeError()" class="ml-4 opacity-75 hover:opacity-100"><i class="fa-solid fa-times"></i></button>
+        </div>
+
+        <!-- 页面 1: 角色选择 -->
+        <div id="view-home" class="view-section transition-opacity duration-300">
+            <div class="grid grid-cols-2 gap-4">
+                <button onclick="initApp('sender')" class="group flex flex-col items-center justify-center p-6 bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md hover:border-blue-500 transition-all duration-200 cursor-pointer">
+                    <div class="w-14 h-14 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center text-2xl mb-3 group-hover:scale-110 transition-transform">
+                        <i class="fa-solid fa-upload"></i>
+                    </div>
+                    <h3 class="font-bold text-lg">我要发送</h3>
+                    <p class="text-xs text-slate-400 mt-1">生成连接码</p>
+                </button>
+
+                <button onclick="initApp('receiver')" class="group flex flex-col items-center justify-center p-6 bg-white border border-slate-200 rounded-2xl shadow-sm hover:shadow-md hover:border-green-500 transition-all duration-200 cursor-pointer">
+                    <div class="w-14 h-14 rounded-full bg-green-50 text-green-600 flex items-center justify-center text-2xl mb-3 group-hover:scale-110 transition-transform">
+                        <i class="fa-solid fa-download"></i>
+                    </div>
+                    <h3 class="font-bold text-lg">我要接收</h3>
+                    <p class="text-xs text-slate-400 mt-1">连接发送端</p>
+                </button>
+            </div>
+            
+            <div class="mt-6 p-4 bg-blue-50 rounded-xl border border-blue-100 text-sm text-blue-800">
+                <i class="fa-solid fa-circle-info mr-2"></i>
+                <span class="opacity-80">确保两台设备均已联网。数据通过 WebRTC 直接传输，不经过第三方服务器存储。</span>
+            </div>
+        </div>
+
+        <!-- 页面 2: 发送端界面 -->
+        <div id="view-sender" class="view-section hidden">
+            <div class="flex justify-between items-center mb-6">
+                <button onclick="resetApp()" class="text-slate-400 hover:text-slate-600 text-sm">
+                    <i class="fa-solid fa-arrow-left mr-1"></i> 返回
+                </button>
+                <span class="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-bold">发送模式</span>
+            </div>
+
+            <!-- ID 和二维码显示区 -->
+            <div class="text-center mb-8">
+                <div class="text-slate-500 text-sm mb-2">让接收方扫描或输入此 ID</div>
+                <div id="loader-id" class="flex justify-center my-4">
+                    <i class="fa-solid fa-circle-notch fa-spin text-2xl text-blue-500"></i>
+                </div>
+                
+                <div id="id-display-area" class="hidden animate-fade-in">
+                    <div class="text-3xl font-mono font-bold tracking-wider text-slate-800 break-all select-all cursor-pointer hover:text-blue-600 transition-colors" onclick="copyId()" title="点击复制">
+                        <span id="my-peer-id">...</span>
+                        <i class="fa-regular fa-copy text-base ml-2 opacity-50"></i>
+                    </div>
+                    
+                    <div class="flex justify-center mt-4 p-2 bg-white rounded-xl shadow-sm inline-block border border-slate-200">
+                        <div id="qrcode"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 连接状态 -->
+            <div id="sender-status" class="mb-6 p-3 rounded-lg bg-slate-100 text-slate-500 text-center text-sm">
+                <i class="fa-solid fa-spinner fa-spin mr-2 hidden" id="waiting-icon"></i>
+                <span id="sender-status-text">等待接收端连接...</span>
+            </div>
+
+            <!-- 文件选择区 (连接后显示) -->
+            <div id="file-drop-area" class="hidden">
+                <label for="file-input" class="drop-zone block w-full h-32 rounded-xl flex flex-col items-center justify-center cursor-pointer hover:bg-slate-50 text-slate-400 hover:text-blue-500">
+                    <i class="fa-solid fa-cloud-arrow-up text-3xl mb-2"></i>
+                    <span class="text-sm font-medium">点击或拖拽文件至此</span>
+                    <input type="file" id="file-input" class="hidden" multiple onchange="handleFiles(this.files)">
+                </label>
+            </div>
+
+            <!-- 传输列表 -->
+            <div id="sender-file-list" class="mt-4 space-y-2 max-h-48 overflow-y-auto"></div>
+        </div>
+
+        <!-- 页面 3: 接收端界面 -->
+        <div id="view-receiver" class="view-section hidden">
+            <div class="flex justify-between items-center mb-6">
+                <button onclick="resetApp()" class="text-slate-400 hover:text-slate-600 text-sm">
+                    <i class="fa-solid fa-arrow-left mr-1"></i> 返回
+                </button>
+                <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-bold">接收模式</span>
+            </div>
+
+            <!-- 连接输入区 -->
+            <div id="connect-form" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 mb-1">输入发送端 ID</label>
+                    <div class="flex space-x-2">
+                        <input type="text" id="target-id-input" placeholder="例如: happy-dog-23" class="flex-1 px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none uppercase transition-all">
+                        <button onclick="connectToPeer()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition-colors">
+                            连接
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="relative py-2">
+                    <div class="absolute inset-0 flex items-center"><div class="w-full border-t border-slate-200"></div></div>
+                    <div class="relative flex justify-center"><span class="bg-f3f4f6 px-2 text-xs text-slate-400 bg-white">或者</span></div>
+                </div>
+
+                <div class="text-center text-sm text-slate-400">
+                    如果使用手机，可以直接扫描发送端二维码自动填充
+                </div>
+            </div>
+
+            <!-- 连接状态 -->
+            <div id="receiver-status" class="hidden mb-6 p-4 rounded-xl bg-green-50 border border-green-100 text-green-800 flex items-center justify-center">
+                <i class="fa-solid fa-link mr-2"></i>
+                <span id="receiver-status-text">已连接到发送端</span>
+            </div>
+
+            <!-- 接收文件列表 -->
+            <div id="receiver-file-list" class="mt-4 space-y-3 max-h-60 overflow-y-auto"></div>
+        </div>
+
+    </main>
+
+    <footer class="mt-8 text-slate-400 text-xs text-center">
+        <p>基于 PeerJS 技术构建 | 无服务器隐私保护</p>
+    </footer>
+
+    <script>
+        // --- 状态管理 ---
+        let peer = null;
+        let conn = null;
+        let myId = null;
+        let isConnected = false;
+        
+        // 文件分片配置
+        const CHUNK_SIZE = 16 * 1024; // 16KB per chunk (safe for reliable delivery)
+        
+        // 简单的随机 ID 生成器 (PeerJS 默认也会生成 UUID，但我们想要更短好记的)
+        function generateShortId() {
+            const adjectives = ['red', 'blue', 'fast', 'smart', 'cool', 'happy', 'safe'];
+            const nouns = ['fox', 'cat', 'dog', 'bird', 'fish', 'bear', 'lion'];
+            const num = Math.floor(Math.random() * 999);
+            return `${adjectives[Math.floor(Math.random()*adjectives.length)]}-${nouns[Math.floor(Math.random()*nouns.length)]}-${num}`;
+        }
+
+        // --- 视图切换 ---
+        function switchView(viewName) {
+            document.querySelectorAll('.view-section').forEach(el => el.classList.add('hidden'));
+            document.getElementById(`view-${viewName}`).classList.remove('hidden');
+        }
+
+        function resetApp() {
+            if(peer) peer.destroy();
+            peer = null;
+            conn = null;
+            isConnected = false;
+            document.getElementById('sender-file-list').innerHTML = '';
+            document.getElementById('receiver-file-list').innerHTML = '';
+            document.getElementById('file-drop-area').classList.add('hidden');
+            document.getElementById('connect-form').classList.remove('hidden');
+            document.getElementById('receiver-status').classList.add('hidden');
+            document.getElementById('target-id-input').value = '';
+            switchView('home');
+        }
+
+        // --- 核心逻辑: 初始化 ---
+        function initApp(role) {
+            switchView(role);
+            
+            // 初始化 Peer
+            // 注意: 在生产环境中，建议搭建自己的 PeerServer，这里使用 PeerJS 提供的免费公共云服务
+            // 缺点是偶尔不稳定，优点是无需后端代码。
+            const customId = role === 'sender' ? generateShortId() : null;
+            
+            peer = new Peer(customId, {
+                debug: 2,
+                config: {
+                    'iceServers': [
+                        { urls: 'stun:stun.l.google.com:19302' },
+                        { urls: 'stun:stun1.l.google.com:19302' }
+                    ]
+                }
+            });
+
+            peer.on('open', (id) => {
+                console.log('My Peer ID is: ' + id);
+                myId = id;
+                
+                if (role === 'sender') {
+                    setupSenderUI(id);
+                } else {
+                    // 接收端初始化完毕，检查 URL 是否有自动连接参数
+                    const urlParams = new URLSearchParams(window.location.search);
+                    const connectTo = urlParams.get('connectTo');
+                    if(connectTo) {
+                        document.getElementById('target-id-input').value = connectTo;
+                        // 稍微延迟一下给用户反应时间
+                        setTimeout(() => connectToPeer(), 500);
+                    }
+                }
+            });
+
+            peer.on('error', (err) => {
+                console.error(err);
+                showError('连接服务出错: ' + err.type);
+            });
+
+            // 被动连接监听 (作为发送端被连接时，或者接收端反向握手)
+            peer.on('connection', (connection) => {
+                handleConnection(connection);
+            });
+        }
+
+        // --- 发送端逻辑 ---
+        function setupSenderUI(id) {
+            document.getElementById('loader-id').classList.add('hidden');
+            document.getElementById('id-display-area').classList.remove('hidden');
+            document.getElementById('my-peer-id').innerText = id;
+            document.getElementById('waiting-icon').classList.remove('hidden');
+
+            // 生成二维码
+            const qrContainer = document.getElementById('qrcode');
+            qrContainer.innerHTML = '';
+            
+            // 构建智能连接链接
+            // 如果是在本地 file:// 运行，只包含 ID
+            // 如果是在 http/https 运行，生成完整 URL
+            let qrData = id;
+            if (window.location.protocol.startsWith('http')) {
+                const url = new URL(window.location.href);
+                url.searchParams.set('connectTo', id);
+                qrData = url.toString();
+            }
+            
+            new QRCode(qrContainer, {
+                text: qrData,
+                width: 128,
+                height: 128,
+                colorDark : "#000000",
+                colorLight : "#ffffff",
+                correctLevel : QRCode.CorrectLevel.H
+            });
+        }
+
+        function copyId() {
+            const id = document.getElementById('my-peer-id').innerText;
+            navigator.clipboard.writeText(id).then(() => {
+                const original = document.getElementById('my-peer-id').innerText;
+                document.getElementById('my-peer-id').innerText = "已复制!";
+                setTimeout(() => document.getElementById('my-peer-id').innerText = original, 1500);
+            });
+        }
+
+        // --- 接收端逻辑 ---
+        function connectToPeer() {
+            const targetId = document.getElementById('target-id-input').value.trim();
+            if(!targetId) {
+                showError("请输入发送端 ID");
+                return;
+            }
+            
+            const btn = document.querySelector('#connect-form button');
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 连接中...';
+            btn.disabled = true;
+
+            const connection = peer.connect(targetId, {
+                reliable: true
+            });
+
+            connection.on('open', () => {
+                handleConnection(connection);
+            });
+
+            connection.on('error', (err) => {
+                showError("连接失败，请检查 ID 是否正确");
+                btn.innerHTML = '连接';
+                btn.disabled = false;
+            });
+            
+            // 5秒超时保护
+            setTimeout(() => {
+                if(!isConnected) {
+                    btn.innerHTML = '连接';
+                    btn.disabled = false;
+                    // peerjs sometimes doesn't fire error on invalid ID immediately
+                }
+            }, 5000);
+        }
+
+        // --- 通用连接处理 ---
+        function handleConnection(connection) {
+            conn = connection;
+            isConnected = true;
+
+            // UI 更新
+            if (document.getElementById('view-sender').classList.contains('hidden')) {
+                // 当前是接收端
+                document.getElementById('connect-form').classList.add('hidden');
+                document.getElementById('receiver-status').classList.remove('hidden');
+                document.getElementById('receiver-status-text').innerText = `已连接到: ${conn.peer}`;
+            } else {
+                // 当前是发送端
+                document.getElementById('sender-status-text').innerText = `已连接设备: ${conn.peer}`;
+                document.getElementById('waiting-icon').classList.add('hidden');
+                document.getElementById('sender-status').classList.remove('bg-slate-100', 'text-slate-500');
+                document.getElementById('sender-status').classList.add('bg-green-50', 'text-green-700', 'border', 'border-green-200');
+                document.getElementById('file-drop-area').classList.remove('hidden');
+            }
+
+            // 数据接收监听
+            conn.on('data', (data) => {
+                handleIncomingData(data);
+            });
+
+            conn.on('close', () => {
+                isConnected = false;
+                showError("连接已断开");
+                // 简单处理：重置 UI 状态...
+            });
+        }
+
+        // --- 文件发送逻辑 ---
+        function handleFiles(files) {
+            if (!conn || !isConnected) {
+                showError("未连接到接收端");
+                return;
+            }
+
+            Array.from(files).forEach(file => {
+                sendFile(file);
+            });
+        }
+
+        function sendFile(file) {
+            // 1. 在发送端 UI 创建条目
+            const fileId = Date.now() + Math.random().toString(36).substr(2, 9);
+            addFileToUI('sender-file-list', file.name, file.size, fileId, 'sending');
+
+            // 2. 发送文件元数据 (Metadata)
+            conn.send({
+                type: 'meta',
+                fileId: fileId,
+                name: file.name,
+                size: file.size,
+                fileType: file.type
+            });
+
+            // 3. 读取并发送文件内容 (使用 PeerJS 的自动二进制处理)
+            // 注意: PeerJS 可以直接发送 Blob/File，底层会自动处理分片。
+            // 但为了有进度条，我们需要自己控制一下或者依赖浏览器的 buffer。
+            // 这里为了代码简洁且稳定，我们直接发 Blob，但分块发送以避免阻塞 UI 线程并模拟进度。
+            
+            const chunkSize = 64 * 1024; // 64KB
+            const totalChunks = Math.ceil(file.size / chunkSize);
+            let currentChunk = 0;
+
+            const reader = new FileReader();
+            
+            function readNextChunk() {
+                const start = currentChunk * chunkSize;
+                const end = Math.min(file.size, start + chunkSize);
+                const blob = file.slice(start, end);
+                reader.readAsArrayBuffer(blob);
+            }
+
+            reader.onload = (e) => {
+                conn.send({
+                    type: 'chunk',
+                    fileId: fileId,
+                    data: e.target.result,
+                    chunkIndex: currentChunk
+                });
+
+                currentChunk++;
+                
+                // 更新进度条
+                const percent = Math.min(100, Math.round((currentChunk / totalChunks) * 100));
+                updateProgress(fileId, percent);
+
+                if (currentChunk < totalChunks) {
+                    // 使用 setTimeout 避免阻塞 UI
+                    if(currentChunk % 50 === 0) setTimeout(readNextChunk, 10); 
+                    else readNextChunk();
+                } else {
+                    // 发送完成信号
+                    conn.send({ type: 'end', fileId: fileId });
+                    markComplete(fileId, true);
+                }
+            };
+
+            readNextChunk();
+        }
+
+        // --- 文件接收逻辑 ---
+        const incomingFiles = {}; // 暂存正在接收的文件
+
+        function handleIncomingData(data) {
+            if (data.type === 'meta') {
+                // 收到文件元数据，准备接收
+                incomingFiles[data.fileId] = {
+                    name: data.name,
+                    size: data.size,
+                    type: data.fileType,
+                    chunks: [],
+                    receivedSize: 0,
+                    startTime: Date.now()
+                };
+                addFileToUI('receiver-file-list', data.name, data.size, data.fileId, 'receiving');
+            } 
+            else if (data.type === 'chunk') {
+                // 收到文件块
+                const fileCtx = incomingFiles[data.fileId];
+                if (!fileCtx) return;
+
+                fileCtx.chunks.push(data.data); // 简单的内存组装，对于超大文件(1GB+)需要 StreamSaver.js，此处作为简化工具仅存内存
+                fileCtx.receivedSize += data.data.byteLength;
+
+                const percent = Math.min(100, Math.round((fileCtx.receivedSize / fileCtx.size) * 100));
+                updateProgress(data.fileId, percent);
+            } 
+            else if (data.type === 'end') {
+                // 接收完成，生成下载
+                const fileCtx = incomingFiles[data.fileId];
+                if (!fileCtx) return;
+
+                const blob = new Blob(fileCtx.chunks, { type: fileCtx.type });
+                const url = URL.createObjectURL(blob);
+                
+                markComplete(data.fileId, false, url, fileCtx.name);
+                delete incomingFiles[data.fileId]; // 清理内存
+            }
+        }
+
+        // --- UI 辅助函数 ---
+        function formatSize(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function addFileToUI(containerId, name, size, fileId, status) {
+            const container = document.getElementById(containerId);
+            const div = document.createElement('div');
+            div.id = `file-${fileId}`;
+            div.className = "bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex items-center gap-3";
+            
+            const iconClass = status === 'sending' ? 'fa-file-export text-blue-500' : 'fa-file-import text-green-500';
+            
+            div.innerHTML = `
+                <div class="w-10 h-10 rounded-full bg-slate-50 flex items-center justify-center shrink-0">
+                    <i class="fa-solid ${iconClass}"></i>
+                </div>
+                <div class="flex-1 min-w-0">
+                    <div class="flex justify-between items-center mb-1">
+                        <p class="text-sm font-medium text-slate-800 truncate">${name}</p>
+                        <span class="text-xs text-slate-400">${formatSize(size)}</span>
+                    </div>
+                    <div class="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                        <div id="progress-${fileId}" class="bg-blue-500 h-2 rounded-full w-0 transition-all duration-200"></div>
+                    </div>
+                </div>
+                <div id="action-${fileId}" class="w-8 flex justify-end">
+                    <span class="text-xs text-slate-400">0%</span>
+                </div>
+            `;
+            container.prepend(div); // 新文件在顶部
+        }
+
+        function updateProgress(fileId, percent) {
+            const progressBar = document.getElementById(`progress-${fileId}`);
+            const actionArea = document.querySelector(`#file-${fileId} #action-${fileId} span`);
+            if (progressBar) progressBar.style.width = `${percent}%`;
+            if (actionArea) actionArea.innerText = `${percent}%`;
+        }
+
+        function markComplete(fileId, isSender, downloadUrl = null, fileName = null) {
+            const progressBar = document.getElementById(`progress-${fileId}`);
+            if (progressBar) {
+                progressBar.classList.remove('bg-blue-500');
+                progressBar.classList.add('bg-green-500');
+            }
+
+            const actionArea = document.getElementById(`action-${fileId}`);
+            if (actionArea) {
+                if (isSender) {
+                    actionArea.innerHTML = `<i class="fa-solid fa-check text-green-500"></i>`;
+                } else {
+                    actionArea.innerHTML = `
+                        <a href="${downloadUrl}" download="${fileName}" class="w-8 h-8 flex items-center justify-center bg-green-100 text-green-600 rounded-full hover:bg-green-200 transition-colors" title="下载">
+                            <i class="fa-solid fa-download"></i>
+                        </a>
+                    `;
+                }
+            }
+        }
+
+        function showError(msg) {
+            const toast = document.getElementById('error-toast');
+            document.getElementById('error-msg').innerText = msg;
+            toast.classList.remove('hidden');
+            setTimeout(() => {
+                toast.classList.add('hidden');
+            }, 4000);
+        }
+
+        function closeError() {
+            document.getElementById('error-toast').classList.add('hidden');
+        }
+
+        // 拖拽支持
+        const dropZone = document.querySelector('.drop-zone');
+        
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, highlight, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, unhighlight, false);
+        });
+
+        function highlight(e) {
+            dropZone.classList.add('active');
+        }
+
+        function unhighlight(e) {
+            dropZone.classList.remove('active');
+        }
+
+        dropZone.addEventListener('drop', handleDrop, false);
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            handleFiles(files);
+        }
+    </script>
+</body>
+</html>
